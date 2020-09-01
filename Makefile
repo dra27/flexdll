@@ -71,6 +71,7 @@ MSVC_PREFIX=
 MSVC64_PREFIX=
 MSVCC=cl.exe $(MSVC_FLAGS)
 MSVCC64=cl.exe $(MSVC_FLAGS)
+MSVCCARM64=cl.exe $(MSVC_FLAGS)
 else
 ifeq ($(MSVS_PATH),)
 # Otherwise, assume the 32-bit version of VS 2008 or Win7 SDK is in the path.
@@ -87,6 +88,7 @@ MSVC64_PREFIX=LIB="$(MSVC64_LIB)" INCLUDE="$(MSVC_INCLUDE)"
 
 MSVCC = $(MSVCC_ROOT)/cl.exe $(MSVC_FLAGS)
 MSVCC64 = $(MSVCC_ROOT)/amd64/cl.exe $(MSVC_FLAGS)
+# COMBAK MSVCCARM64
 else
 MSVCC_ROOT:=
 MSVC_PREFIX=PATH="$(MSVS_PATH)$(PATH)" LIB="$(MSVS_LIB)$(LIB)" INCLUDE="$(MSVS_INC)$(INCLUDE)"
@@ -94,6 +96,7 @@ MSVC64_PREFIX=PATH="$(MSVS64_PATH)$(PATH)" LIB="$(MSVS64_LIB)$(LIB)" INCLUDE="$(
 
 MSVCC = cl.exe $(MSVC_FLAGS)
 MSVCC64 = cl.exe $(MSVC_FLAGS)
+# COMBAK MSVCCARM64
 endif
 endif
 
@@ -142,6 +145,7 @@ support: $(addprefix build_, $(CHAINS))
 
 build_gnat: flexdll_gnat.o flexdll_initer_gnat.o
 build_msvc: flexdll_msvc.obj flexdll_initer_msvc.obj
+build_msvcarm64: flexdll_msvcarm64.obj flexdll_initer_msvcarm64.obj
 build_msvc64: flexdll_msvc64.obj flexdll_initer_msvc64.obj
 build_cygwin64: flexdll_cygwin64.o flexdll_initer_cygwin64.o
 build_mingw: flexdll_mingw.o flexdll_initer_mingw.o
@@ -202,6 +206,10 @@ version_res.o: version.rc flexdll.opam
 flexdll_msvc.obj: flexdll.c flexdll.h
 	$(MSVC_PREFIX) $(MSVCC) /DMSVC -c /Fo"$@" $<
 
+# COMBAK msvs-detect has no support for ARM64 yet
+flexdll_msvcarm64.obj: flexdll.c flexdll.h
+	$(MSVCCARM64) /DMSVC /DMSVCARM64 -c /Fo"$@" $<
+
 flexdll_msvc64.obj: flexdll.c flexdll.h
 	$(MSVC64_PREFIX) $(MSVCC64) /DMSVC /DMSVC64 -c /Fo"$@" $<
 
@@ -219,6 +227,10 @@ flexdll_mingw64.o: flexdll.c flexdll.h
 
 flexdll_initer_msvc.obj: flexdll_initer.c
 	$(MSVC_PREFIX) $(MSVCC) -c /Fo"$@" $<
+
+# COMBAK msvs-detect has no support for ARM64 yet
+flexdll_initer_msvcarm64.obj: flexdll_initer.c
+	$(MSVCCARM64) -c /Fo"flexdll_initer_msvcarm64.obj" flexdll_initer.c
 
 flexdll_initer_msvc64.obj: flexdll_initer.c
 	$(MSVC64_PREFIX) $(MSVCC64) -c /Fo"$@" $<
@@ -250,6 +262,8 @@ demo_mingw64: flexlink.exe flexdll_mingw64.o flexdll_initer_mingw64.o
 
 demo_msvc64:  flexlink.exe flexdll_msvc64.obj flexdll_initer_msvc64.obj
 	$(MSVC64_PREFIX) $(MAKE) -C test clean demo CHAIN=msvc64 CC="$(MSVCC64)" PLUG2_CFLAGS="/bigobj" O=obj
+
+# COMBAK demo_msvcarm64
 
 distclean: clean
 	rm -f Makefile.winsdk

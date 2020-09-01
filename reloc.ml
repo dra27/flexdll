@@ -40,7 +40,7 @@ let flexdir =
     Filename.dirname Sys.executable_name
 
 let ext_obj () =
-  if !toolchain = `MSVC || !toolchain = `MSVC64 then ".obj" else ".o"
+  if !toolchain = `MSVC || !toolchain = `MSVC64 || !toolchain = `MSVCARM64 then ".obj" else ".o"
 
 (* Temporary files *)
 
@@ -198,7 +198,7 @@ type cmdline = {
 
 let new_cmdline () =
   let rf = match !toolchain with
-  | `MSVC | `MSVC64 | `LIGHTLD -> true
+  | `MSVC | `MSVC64 | `MSVCARM64 | `LIGHTLD -> true
   | `MINGW | `MINGW64 | `GNAT | `GNAT64 | `CYGWIN64 -> false
   in
   {
@@ -206,7 +206,7 @@ let new_cmdline () =
   }
 
 let run_command cmdline cmd =
-  let pipe_to_null = (!toolchain = `MSVC || !toolchain = `MSVC64) in
+  let pipe_to_null = (!toolchain = `MSVC || !toolchain = `MSVC64 || !toolchain = `MSVCARM64) in
   let silencer = if pipe_to_null then " >NUL 2>NUL" else ""
   in
   (* note: for Cygwin, using bash allow to follow symlinks to find
@@ -331,7 +331,7 @@ let find_file =
             let base = String.sub fn 2 (String.length fn - 2) in
             if String.length base > 0 && base.[0] = ':' then
               [String.sub base 1 (String.length base - 1)], []
-            else if !toolchain = `MSVC || !toolchain = `MSVC64 then
+            else if !toolchain = `MSVC || !toolchain = `MSVC64 || !toolchain = `MSVCARM64 then
               ["lib" ^ base; base], standard_suffixes
             else
               ["lib" ^ base], standard_suffixes
@@ -359,12 +359,14 @@ let int_to_buf b i =
   assert(i >= 0);
   match !machine with
   | `x86 -> int32_to_buf b i
+  | `arm64
   | `x64 -> int32_to_buf b i; int32_to_buf b 0
 
 let exportable s =
   match !machine with
   | `x86 ->
       s <> "" && (s.[0] = '_' || s.[0] = '?')
+  | `arm64
   | `x64 ->
       if String.length s > 2 && s.[0] = '?' && s.[1] = '?' then false
       else true
@@ -379,6 +381,7 @@ let drop_underscore obj s =
         | '?' -> s
         | _ -> failwith (Printf.sprintf "In %s, symbol %s doesn't start with _ or ?" obj.obj_name s)
       end
+  | `arm64
   | `x64 ->
       s
 
@@ -434,6 +437,7 @@ let add_reloc_table obj obj_name p =
          - https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#x64-processors *)
       let kind = match !machine, rel.rtype with
         | `x86, 0x06 (* IMAGE_REL_I386_DIR32 *)
+        | `arm64, 0x0e (* IMAGE_REL_ARM64_ADDR64 *)
         | `x64, 0x01 (* IMAGE_REL_AMD64_ADDR64 *) ->
             0x0002 (* absolute, native size (32/64) *)
 
@@ -441,7 +445,19 @@ let add_reloc_table obj obj_name p =
         | `x64, 0x03 (* IMAGE_REL_AMD64_ADDR32NB *) ->
             0x0007 (* 32nb *)
 
+        | `arm64, 0x07 (* IMAGE_REL_ARM64_PAGEOFFSET_12L *)
+        | `arm64, 0x04 (* IMAGE_REL_ARM64_PAGEBASE_REL21 *)
+        | `arm64, 0x06 (* IMAGE_REL_ARM64_PAGEOFFSET_12A *)
+        | `arm64, 0x03 (* IMAGE_REL_ARM64_BRANCH26 *) ->
+            0x0100 (* XXX COMBAK Can't ignore! *)
+
+        (* COMBAK Possible?
+        | `arm64, 0x0f (* IMAGE_REL_ARM64_BRANCH19 *)
+        | `arm64, 0x10 (* IMAGE_REL_ARM64_BRANCH14 *)
+        *)
+
         | `x64, 0x04 (* IMAGE_REL_AMD64_REL32 *)
+        | `arm64, 0x11 (* IMAGE_REL_ARM64_REL32 *)
         | `x86, 0x14 (* IMAGE_REL_I386_REL32 *) when not !no_rel_relocs ->
             0x0001 (* rel32 *)
 
@@ -457,7 +473,9 @@ let add_reloc_table obj obj_name p =
             0x0006 (* rel32_5 *)
 
         | (`x86 | `x64), (0x0a (* IMAGE_REL_{I386|AMD64}_SECTION *) |
-                          0x0b (* IMAGE_REL_{I386|AMD64}_SECREL*) ) ->
+                          0x0b (* IMAGE_REL_{I386|AMD64}_SECREL*) )
+        | `arm64, (0x0d (* IMAGE_REL_ARM64_SECTION *) |
+                   0x08 (* IMAGE_REL_ARM64_SECREL *) ) ->
             0x0100 (* debug relocs: ignore *)
 
         | _, k ->
@@ -540,7 +558,7 @@ let add_reloc_table obj obj_name p =
 (* Create a table for import symbols __imp_XXX *)
 
 let add_import_table obj imports =
-  let ptr_size = match !machine with `x86 -> 4 | `x64 -> 8 in
+  let ptr_size = match !machine with `x86 -> 4 | `arm64 | `x64 -> 8 in
   let sect = Section.create ".imptbl" 0xc0300040l in
   obj.sections <- sect :: obj.sections;
   sect.data <- `String (Bytes.make (ptr_size * List.length imports) '\000');
@@ -618,7 +636,7 @@ let collect_dllexports obj =
       (List.find_all (fun (cmd,_args) -> String.uppercase_ascii cmd = "EXPORT") dirs)
   in
   match !toolchain with
-  | `MSVC | `MSVC64 -> List.map (drop_underscore obj) l
+  | `MSVC | `MSVC64 | `MSVCARM64 -> List.map (drop_underscore obj) l
   | _ -> l
 
 let collect f l =
@@ -650,7 +668,7 @@ let parse_dll_exports fn =
 
 
 let dll_exports fn = match !toolchain with
-  | `MSVC | `MSVC64 | `LIGHTLD ->
+  | `MSVC | `MSVC64 | `MSVCARM64 | `LIGHTLD ->
       failwith "Creation of import library not supported for this toolchain"
   | `GNAT | `GNAT64 | `CYGWIN64 | `MINGW | `MINGW64 ->
       let dmp = temp_file "dyndll" ".dmp" in
@@ -743,7 +761,7 @@ let build_dll link_exe output_file files exts extra_args =
   let libs = collect (function (f, `Lib (x,_)) -> Some (f,x) | _ -> None) files in
 
   let with_data_symbol symbols sym_name f =
-    if !toolchain <> `MSVC && !toolchain <> `MSVC64 then
+    if !toolchain <> `MSVC && !toolchain <> `MSVC64 && !toolchain <> `MSVCARM64 then
       match check_prefix "__nm_" sym_name with
       | None -> ()
       | Some s ->
@@ -853,7 +871,7 @@ let build_dll link_exe output_file files exts extra_args =
     if main_pgm then add_def (usym "static_symtable")
     else add_def (usym "reloctbl");
 
-    if !machine = `x64 then add_def "__ImageBase"
+    if !machine = `x64 || !machine = `arm64 then add_def "__ImageBase"
     else add_def "___ImageBase";
 
     !defined, !from_imports, (Hashtbl.find aliases), (Hashtbl.find alternates)
@@ -1095,7 +1113,7 @@ let build_dll link_exe output_file files exts extra_args =
   end;
 
   let cmd = match !toolchain with
-    | `MSVC | `MSVC64 ->
+    | `MSVC | `MSVC64 | `MSVCARM64 ->
         (* Putting the file the descriptor object at the beginning
            with MSVC compilers seems to break Stack overflow recovery
            in OCaml. No idea why. *)
@@ -1116,7 +1134,12 @@ let build_dll link_exe output_file files exts extra_args =
         in
 
         let extra_args =
-          if !machine = `x64 then (Printf.sprintf "/base:%s " !base_addr) ^ extra_args else extra_args
+          let base_addr =
+            match !base_addr with
+            | Some b -> b
+            | None -> if !machine = `x64 then "0x10000" else "0x100000000"
+          in
+          if !machine = `x64 || !machine = `arm64 then (Printf.sprintf "/base:%s " base_addr) ^ extra_args else extra_args
         in
 
         let extra_args =
@@ -1142,6 +1165,7 @@ let build_dll link_exe output_file files exts extra_args =
           let s =
             match !machine with
             | `x86 -> "FlexDLLiniter@12"
+            | `arm64
             | `x64 -> "FlexDLLiniter"
           in
           Printf.sprintf "/entry:%s " s
@@ -1222,6 +1246,7 @@ let build_dll link_exe output_file files exts extra_args =
           let default_manifest =
             match !machine with
             | `x86 -> "default.manifest"
+            | `arm64 -> "default_arm64.manifest" (* XXX COMBAK *)
             | `x64 -> "default_amd64.manifest"
           in
           Filename.concat flexdir default_manifest
@@ -1395,7 +1420,7 @@ let setup_toolchain () =
           ];
       default_libs := ["-lkernel32"; "-luser32"; "-ladvapi32";
                        "-lshell32"; "-lcygwin"; "-lgcc_s"; "-lgcc"]
-  | `MSVC | `MSVC64 ->
+  | `MSVC | `MSVC64 | `MSVCARM64 ->
       search_path := !dirs @
         parse_libpath (try Sys.getenv "LIB" with Not_found -> "");
       if not !custom_crt then
@@ -1437,7 +1462,7 @@ let compile_if_needed file =
   if Filename.check_suffix file ".c" then begin
     let tmp_obj = temp_file "dyndll" (ext_obj ()) in
     let (pipe, stdout) =
-      if (!toolchain = `MSVC || !toolchain = `MSVC64) && !verbose < 2 && not !dry_mode then
+      if (!toolchain = `MSVC || !toolchain = `MSVC64 || !toolchain = `MSVCARM64) && !verbose < 2 && not !dry_mode then
         try
           let (t, c) = open_temp_file "msvc" "stdout" in
           close_out c;
@@ -1447,7 +1472,7 @@ let compile_if_needed file =
       else
         ("", "") in
     let cmd = match !toolchain with
-      | `MSVC | `MSVC64 ->
+      | `MSVC | `MSVC64 | `MSVCARM64 ->
           Printf.sprintf
             "cl /c /MD /nologo /Fo%s %s %s%s"
             (Filename.quote tmp_obj)
@@ -1508,6 +1533,7 @@ let all_files () =
   let tc = match !toolchain with
   | `MSVC -> "msvc.obj"
   | `MSVC64 -> "msvc64.obj"
+  | `MSVCARM64 -> "msvcarm64.obj"
   | `CYGWIN64 -> "cygwin64.o"
   | `MINGW64 -> "mingw64.o"
   | `GNAT -> "gnat.o"
