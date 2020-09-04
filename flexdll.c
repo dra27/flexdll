@@ -269,6 +269,7 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
   SYSTEM_INFO si;
   char *page_start, *page_end;
   char *prev_page_start = (char*)1, *prev_page_end = (char*)1;
+  unsigned int reloc_kind;
 
   if (!tbl) return;
 
@@ -320,82 +321,71 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
       }
     }
 
-    switch (ptr->kind & 0xff) {
+    /* Perform the relocation.
+       s - address of the symbol (provided by the loading process)
+       ptr->addr - address of whatever needs patching
+     */
+    reloc_kind = ptr->kind & 0xff;
+    if (reloc_kind == RELOC_ABS) {
+    /* - IMAGE_REL_I386_DIR32
+       - IMAGE_REL_ARM64_ADDR64
+       - IMAGE_REL_AMD64_ADDR64
+       Type: pointer
+       Patch: add address of s
+     */
     case RELOC_ABS:
       *(ptr->addr) += s;
-      break;
-    case RELOC_REL32:
-      s -= (INT_PTR)(ptr -> addr) + 4;
+    } else {
+    /* - IMAGE_REL_I386_REL32
+       - IMAGE_REL_ARM64_REL32
+       - IMAGE_REL_AMD64_REL32 / IMAGE_REL_AMD64_REL32_1 - IMAGE_REL_AMD64_REL32_5
+       - IMAGE_REL_AMD64_REL32NB
+       Type: 32bit
+       Patch: address of s relative to the nth byte after the 32-bit word addressed by ptr->addr
+     */
+      switch (reloc_kind) {
+      case RELOC_REL32:
+        s -= (INT_PTR)(ptr -> addr) + 4;
+        break;
+      case RELOC_REL32_1:
+        s -= (INT_PTR)(ptr -> addr) + 5;
+        break;
+      case RELOC_REL32_2:
+        s -= (INT_PTR)(ptr -> addr) + 6;
+        break;
+      case RELOC_REL32_3:
+        s -= (INT_PTR)(ptr -> addr) + 7;
+        break;
+      case RELOC_REL32_4:
+        s -= (INT_PTR)(ptr -> addr) + 8;
+        break;
+      case RELOC_REL32_5:
+        s -= (INT_PTR)(ptr -> addr) + 9;
+        break;
+      case RELOC_32NB:
+        break;
+      default:
+        fprintf(stderr, "flexdll: unknown relocation kind");
+        exit(2);
+      }
+
       s += *((INT32*) ptr -> addr);
       if (s != (INT32) s) {
-        sprintf(err->message, "flexdll error: cannot relocate %s RELOC_REL32, target is too far: %p  %p", ptr->name, (void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
+        char *rel_name;
+        switch (ptr->kind & 0xff) {
+          case RELOC_REL32: rel_name = ""; break;
+          case RELOC_REL32_1: rel_name = "_1"; break;
+          case RELOC_REL32_2: rel_name = "_2"; break;
+          case RELOC_REL32_3: rel_name = "_3"; break;
+          case RELOC_REL32_4: rel_name = "_4"; break;
+          case RELOC_REL32_5: rel_name = "_5"; break;
+          default: rel_name = "NB"; break;
+        }
+        sprintf(err->message, "flexdll error: cannot relocate %s RELOC_32%s, target is too far: %p  %p", ptr->name, rel_name, (void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
         err->code = 3;
         goto restore;
       }
       *((UINT32*) ptr->addr) = (INT32) s;
-      break;
-    case RELOC_REL32_1:
-      s -= (INT_PTR)(ptr -> addr) + 5;
-      s += *((INT32*) ptr -> addr);
-      if (s != (INT32) s) {
-        sprintf(err->message, "flexdll error: cannot relocate RELOC_REL32_1, target is too far: %p  %p",(void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
-        err->code = 3;
-        goto restore;
-      }
-      *((UINT32*) ptr->addr) = (INT32) s;
-      break;
-    case RELOC_REL32_2:
-      s -= (INT_PTR)(ptr -> addr) + 6;
-      s += *((INT32*) ptr -> addr);
-      if (s != (INT32) s) {
-        sprintf(err->message, "flexdll error: cannot relocate RELOC_REL32_2, target is too far: %p  %p",(void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
-        err->code = 3;
-        goto restore;
-      }
-      *((UINT32*) ptr->addr) = (INT32) s;
-      break;
-    case RELOC_REL32_3:
-      s -= (INT_PTR)(ptr -> addr) + 7;
-      s += *((INT32*) ptr -> addr);
-      if (s != (INT32) s) {
-        sprintf(err->message, "flexdll error: cannot relocate RELOC_REL32_3, target is too far: %p  %p",(void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
-        err->code = 3;
-        goto restore;
-      }
-      *((UINT32*) ptr->addr) = (INT32) s;
-      break;
-    case RELOC_REL32_4:
-      s -= (INT_PTR)(ptr -> addr) + 8;
-      s += *((INT32*) ptr -> addr);
-      if (s != (INT32) s) {
-        sprintf(err->message, "flexdll error: cannot relocate RELOC_REL32_4, target is too far: %p  %p",(void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
-        err->code = 3;
-        goto restore;
-      }
-      *((UINT32*) ptr->addr) = (INT32) s;
-      break;
-    case RELOC_REL32_5:
-      s -= (INT_PTR)(ptr -> addr) + 9;
-      s += *((INT32*) ptr -> addr);
-      if (s != (INT32) s) {
-        sprintf(err->message, "flexdll error: cannot relocate RELOC_REL32_5, target is too far: %p  %p",(void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
-        err->code = 3;
-        goto restore;
-      }
-      *((UINT32*) ptr->addr) = (INT32) s;
-      break;
-    case RELOC_32NB:
-      s += *((INT32*) ptr -> addr);
-      if (s != (INT32) s) {
-        sprintf(err->message, "flexdll error: cannot relocate %s RELOC_32NB, target is too far: %p  %p", ptr->name, (void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
-        err->code = 3;
-        goto restore;
-      }
-      *((UINT32*) ptr->addr) = (INT32) s;
-      break;
-    default:
-      fprintf(stderr, "flexdll: unknown relocation kind");
-      exit(2);
     }
     ptr->kind |= RELOC_DONE;
   }
