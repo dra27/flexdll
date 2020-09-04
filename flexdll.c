@@ -39,6 +39,12 @@ typedef unsigned long uintnat;
 #define RELOC_REL32_4   0x0003
 #define RELOC_REL32_5   0x0006
 #define RELOC_32NB      0x0007
+#define RELOC_PAGEOFFSET_12A 0x0009
+#define RELOC_PAGEOFFSET_12L 0x000a
+#define RELOC_PAGEBASE_REL21 0x000b
+#define RELOC_BRANCH14 0x000c
+#define RELOC_BRANCH19 0x000d
+#define RELOC_BRANCH26 0x000e
 #define RELOC_DONE      0x0100
 
 typedef struct { UINT_PTR kind; char *name; UINT_PTR *addr; } reloc_entry;
@@ -326,7 +332,7 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
        ptr->addr - address of whatever needs patching
      */
     reloc_kind = ptr->kind & 0xff;
-    if (reloc_kind == RELOC_ABS) {
+    switch (reloc_kind) {
     /* - IMAGE_REL_I386_DIR32
        - IMAGE_REL_ARM64_ADDR64
        - IMAGE_REL_AMD64_ADDR64
@@ -335,7 +341,14 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
      */
     case RELOC_ABS:
       *(ptr->addr) += s;
-    } else {
+      break;
+    case RELOC_REL32:
+    case RELOC_REL32_1:
+    case RELOC_REL32_2:
+    case RELOC_REL32_3:
+    case RELOC_REL32_4:
+    case RELOC_REL32_5:
+    case RELOC_32NB:
     /* - IMAGE_REL_I386_REL32
        - IMAGE_REL_ARM64_REL32
        - IMAGE_REL_AMD64_REL32 / IMAGE_REL_AMD64_REL32_1 - IMAGE_REL_AMD64_REL32_5
@@ -364,9 +377,6 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
         break;
       case RELOC_32NB:
         break;
-      default:
-        fprintf(stderr, "flexdll: unknown relocation kind");
-        exit(2);
       }
 
       s += *((INT32*) ptr -> addr);
@@ -386,6 +396,80 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
         goto restore;
       }
       *((UINT32*) ptr->addr) = (INT32) s;
+      break;
+    /* - IMAGE_REL_ARM64_PAGEOFFSET_12A
+       Type: XXX
+       Patch: XXX
+     */
+    case RELOC_PAGEOFFSET_12A:
+      /*fprintf(stderr, "RELOC_PAGEOFFSET_12A for %s; symbol at %#018llX and ptr->addr at 0x%p\n", ptr->name, s, (void*)ptr->addr); fflush(stderr);*/
+      /* Ensure bits 21:10 zeroed (they should be) */
+      *(UINT32*)ptr->addr &= 0xffc003ff;
+      /* Put the low 12 bits of s into the instruction */
+      *(UINT32*)ptr->addr |= ((s << 10) & 0x3ffc00);
+      break;
+    /* - IMAGE_REL_ARM64_PAGEOFFSET_12L
+       Type: XXX
+       Patch: XXX
+     */
+    case RELOC_PAGEOFFSET_12L:
+      /*fprintf(stderr, "RELOC_PAGEOFFSET_12L for %s; symbol at %#018llX and ptr->addr at 0x%p\n", ptr->name, s, (void*)ptr->addr); fflush(stderr);*/
+      if (s & 0x7) {
+        sprintf(err->message, "flexdll error: cannot relocate RELOC_PAGEOFFSET_12L, target %s is not aligned: %p", ptr->name, (void *)s);
+        err->code = 3;
+        goto restore;
+      }
+      /* Ensure bits 21:10 zeroed (they should be) */
+      *(UINT32*)ptr->addr &= 0xffc003ff;
+      /* Put bits 14:3 of s into the instruction */
+      *(UINT32*)ptr->addr |= ((s << 7) & 0x3ffc00);
+      break;
+    /* - IMAGE_REL_ARM64_PAGEBASE_REL21
+       Type: XXX
+       Patch: XXX
+     */
+    case RELOC_PAGEBASE_REL21:
+      /*fprintf(stderr, "RELOC_PAGEBASE_REL21 for %s; symbol at %#018llX and ptr->addr at 0x%p\n", ptr->name, s, (void*)ptr->addr); fflush(stderr);*/
+      /* Convert s to 4KiB page address */
+      s &= ~0xfff;
+      /* Relative address to 4KiB page of PC */
+      s -= ((UINT_PTR)ptr->addr & ~0xfff);
+      if (s > 0xfffff000 || s < 0xffffffff00000000L) {
+        sprintf(err->message, "flexdll error: cannot relocate RELOC_PAGEBASE_REL21, target %s is too far: %p", ptr->name, (void *)s);
+        err->code = 3;
+        goto restore;
+      }
+      /* Ensure bits 30:29 and 23:5 zeroed (they should be) */
+      *(UINT32*)ptr->addr &= 0x9f00001f;
+      *(UINT32*)ptr->addr |= ((*(UINT32*)s << 17) & 0x60000000) | ((*(UINT32*)s >> 7) & 0xffffe0);
+      break;
+    /*case RELOC_BRANCH14: TODO */
+    /*case RELOC_BRANCH19: TODO */
+    /* - IMAGE_REL_ARM64_BRANCH26
+       Type: 32-bit instruction patch
+       Patch: Bits 27:2 of the offset between s and ptr->addr written to bits 25:0 of ptr->addr
+     */
+    case RELOC_BRANCH26:
+      /*fprintf(stderr, "RELOC_BRANCH26 for %s; symbol at %#018llX and ptr->addr at 0x%p\n", ptr->name, s, (void*)ptr->addr); fflush(stderr);*/
+      s -= (INT_PTR)(ptr -> addr);
+      if (s & 0x3) {
+        sprintf(err->message, "flexdll error: cannot relocate RELOC_BRANCH26, target %s is not aligned: %p", ptr->name, (void *)s);
+        err->code = 3;
+        goto restore;
+      }
+      if (s > 0xffffffc || (INT32)s < 0xf0000000) {
+        sprintf(err->message, "flexdll error: cannot relocate RELOC_BRANCH26, target %s is too far: %p", ptr->name, (void *)s);
+        err->code = 3;
+        goto restore;
+        break;
+      }
+      /* Ensure low 26 bits zeroed (they should be) */
+      *(UINT32*)ptr->addr &= 0xfc000000;
+      *(UINT32*)ptr->addr |= ((s >> 2) & 0x3ffffff);
+      break;
+    default:
+      fprintf(stderr, "flexdll: unknown relocation kind");
+      exit(2);
     }
     ptr->kind |= RELOC_DONE;
   }
