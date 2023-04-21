@@ -625,10 +625,6 @@ let patch_output filename =
         if not (Sys.file_exists filename) && (Sys.file_exists (filename ^ ".exe")) then filename ^ ".exe"
         else filename
       in
-      let filename =
-        if !use_cygpath then cygpath1 filename
-        else filename
-      in
       begin try Stacksize.set_stack_reserve filename x
       with exn ->
         Printf.eprintf "Cannot set stack reserve: %s\n%!"
@@ -1491,7 +1487,12 @@ let main () =
       build_dll !exe_mode !output_file files !exts
         (String.concat " " (List.map Filename.quote (List.rev !extra_args)))
   | `PATCH ->
-      patch_output !output_file
+      let output_file =
+        if !use_cygpath then
+          cygpath1 !output_file
+        else
+          !output_file in
+      patch_output output_file
 
 let () =
   try main ()
