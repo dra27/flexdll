@@ -247,8 +247,8 @@ let quote_files cmdline lst =
 
 (* Looking for files *)
 
-let cygpath l =
-  get_output "cygpath -m %s" (String.concat " " (List.map Filename.quote l))
+let cygpath ?accept_error l =
+  get_output ?accept_error "cygpath -m %s" (String.concat " " (List.map Filename.quote l))
 
 let cygpath1 fn =
   get_output1 "cygpath -m %s" fn
@@ -274,9 +274,7 @@ let find_file suffixes fn =
             let fn = Filename.concat dir fn in
             fn :: (List.map (fun suff -> fn ^ suff) suffixes)
          ) (""::!search_path)) in
-  match find_file_in l with
-    | Some x -> Some x
-    | None -> if !use_cygpath then find_file_in (cygpath l) else None
+  find_file_in l
 
 let rec map_until_found f = function
   | [] ->
@@ -1463,7 +1461,12 @@ let main () =
           | "Unix" | "Cygwin" ->
               Sys.command "cygpath -S 2>/dev/null >/dev/null" = 0
           | "Win32" ->
-              Sys.command "cygpath -S 2>NUL >NUL" = 0
+              (* This is very evil! The point is that calling cygpath is expensive, so we want
+                 to combine both detecting it and using it in one *)
+              let converted_search_path = cygpath ~accept_error:true !search_path in
+              if converted_search_path <> [] then
+                search_path := converted_search_path;
+              converted_search_path <> []
           | _ -> assert false
           end
       | (`MSVC|`MSVC64|`LIGHTLD), `None -> false
