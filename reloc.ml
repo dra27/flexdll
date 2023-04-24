@@ -1239,6 +1239,13 @@ let nsplit str sep =
     loop [] 0
 
 let normalize_path path =
+  let path =
+    if Sys.win32 then
+      let back_to_forward c = if c = '\\' then '/' else c in
+      String.init (String.length path) (fun i -> back_to_forward path.[i])
+    else
+      path
+  in
   let path = nsplit path '/' in
   let rec loop acc path =
     match path with
@@ -1252,7 +1259,7 @@ let normalize_path path =
     | [] -> List.rev acc
   in
   let path = loop [] path in
-  String.concat "/" path
+  String.concat Filename.dir_sep path
 
 let remove_duplicate_paths paths =
   let set = Hashtbl.create 16 in
@@ -1274,21 +1281,54 @@ let setup_toolchain () =
   let mingw_libs pre =
     gcc := pre ^ "gcc";
     objdump := pre ^ "objdump";
-    let rec get_lib_search_dirs input =
+    let rec get_lib_search_dirs install libraries input =
       match input with
       | entry :: input ->
-          begin try
+          if String.length entry > 9 && String.sub entry 0 9 = "install: " then
+            get_lib_search_dirs (String.sub entry 9 (String.length entry - 9)) libraries input
+          else begin try
             match split entry '=' with
-            | "libraries: ", paths -> nsplit paths ':'
-            | _ -> get_lib_search_dirs input
+            | "libraries: ", paths -> get_lib_search_dirs install paths input (*nsplit paths ':'*)
+            | _ -> get_lib_search_dirs install libraries input
           with Not_found ->
-            get_lib_search_dirs input
+            get_lib_search_dirs install libraries input
           end
-      | [] -> []
+      | [] -> install, libraries (* XXX This is where the transformation should be being done! *)
     in
     let lib_search_dirs =
-      get_output "%s -print-search-dirs" !gcc
-      |> get_lib_search_dirs
+      let install, libraries =
+        get_lib_search_dirs "" "" (get_output "%s -print-search-dirs" !gcc) in
+      let separator, maybe_cygpath =
+        if Sys.os_type = "Win32" && install <> "" then
+          let install =
+            let c = install.[String.length install - 1] in
+            if c = '\\' || c = '/' then
+              String.sub install 0 (String.length install - 1)
+            else
+              install
+          in
+          if try Sys.is_directory install with Sys_error _ -> false then
+            ';', false
+          else
+            ':', true
+        else
+          ':', true
+      in
+      let libs =
+        nsplit libraries separator
+      in
+      let libs =
+        if maybe_cygpath then
+          (* This is very evil! The point is that calling cygpath is expensive, so we want
+             to combine both detecting it and using it in one *)
+          let converted_search_path = cygpath ~accept_error:true libs in
+          if converted_search_path <> [] then
+            use_cygpath := true;
+          converted_search_path
+        else
+          libs
+      in
+      libs
       |> List.map normalize_path
       |> remove_duplicate_paths
     in
@@ -1456,7 +1496,7 @@ let main () =
       match !toolchain, !cygpath_arg with
       | _, `Yes -> true
       | _, `No -> false
-      | (`GNAT|`GNAT64|`MINGW|`MINGW64|`CYGWIN|`CYGWIN64), `None ->
+      | (`GNAT|`GNAT64|`CYGWIN|`CYGWIN64), `None ->
           begin match Sys.os_type with
           | "Unix" | "Cygwin" ->
               Sys.command "cygpath -S 2>/dev/null >/dev/null" = 0
@@ -1469,6 +1509,7 @@ let main () =
               converted_search_path <> []
           | _ -> assert false
           end
+      | (`MINGW|`MINGW64), `None -> !use_cygpath
       | (`MSVC|`MSVC64|`LIGHTLD), `None -> false
     end;
 
