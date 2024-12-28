@@ -793,9 +793,10 @@ module Coff = struct
                 (* Remove extra information for function symbols *)
                 s.auxs <- Bytes.make (Bytes.length auxs) '\000'
             | _ ->
-                Symbol.dump s;
+                ()
+                (*Symbol.dump s;
                 Printf.printf "aux=%S\n%!" (Bytes.to_string s.auxs);
-                assert false);
+                assert false*));
          (match s.section with
             | `Num i when i > 0 && i <= Array.length sections ->
                 assert (i <= Array.length sections);
