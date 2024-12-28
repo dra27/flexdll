@@ -418,16 +418,25 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
        Patch: XXX
      */
     case RELOC_PAGEOFFSET_12L:
-      fprintf(stderr, "RELOC_PAGEOFFSET_12L for %s; symbol at %#018llX and ptr->addr at 0x%p\n", ptr->name, s, (void*)ptr->addr); fflush(stderr);
+      fprintf(stderr, "RELOC_PAGEOFFSET_12L for %s; symbol at %#018llX and ptr->addr at 0x%p = %x\n", ptr->name, s, (void*)ptr->addr, *(INT32*)ptr->addr); fflush(stderr);
+      /* XXX This doesn't resemble what lld is doing - where did this come from originally? */
       if (s & 0x7) {
         sprintf(err->message, "flexdll error: cannot relocate RELOC_PAGEOFFSET_12L, target %s is not aligned: %p", ptr->name, (void *)s);
         err->code = 3;
         goto restore;
       }
       /* Ensure bits 21:10 zeroed (they should be) */
-      *(UINT32*)ptr->addr &= 0xffc003ff;
+      // *(UINT32*)ptr->addr &= 0xffc003ff;
       /* Put bits 14:3 of s into the instruction */
-      *(UINT32*)ptr->addr |= ((s << 7) & 0x3ffc00);
+      // *(UINT32*)ptr->addr |= ((s << 7) & 0x3ffc00);
+      /* XXX Going with lld */
+      int size = *(UINT32*)ptr->addr >> 30;
+      /* XXX SIMD/FP part in lld?? */
+      /* XXX Alignment check (i.e. the check above) */
+      int imm = (*(UINT32*)ptr->addr >> 10) & 0xfff + (s >> size);
+      /* Zero 21:9 */
+      *(UINT32*)ptr->addr &= ~(0xfff << 10);
+      *(UINT32*)ptr->addr |= (imm << 10);
       break;
     /* - IMAGE_REL_ARM64_PAGEBASE_REL21
        Type: XXX
@@ -462,7 +471,7 @@ static void relocate(resolver f, void *data, reloctbl *tbl, err_t *err) {
         err->code = 3;
         goto restore;
       }
-      if (s > 0xffffffc || (INT32)s < 0xf0000000) {
+      if (s > 0xffffffc /*|| (INT32)s < 0xf0000000*/) {
         sprintf(err->message, "flexdll error: cannot relocate RELOC_BRANCH26, target %s is too far: %p", ptr->name, (void *)s);
         err->code = 3;
         goto restore;
