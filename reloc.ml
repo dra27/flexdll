@@ -733,7 +733,7 @@ let needed imported defined resolve_alias resolve_alternate obj =
 
 let build_dll link_exe output_file files exts extra_args =
   let main_pgm = link_exe <> `DLL in
-  let use_jmptbl = match !use_jmptbl with None -> !machine = `x64 | Some x -> x in
+  let use_jmptbl = not main_pgm && match !use_jmptbl with None -> !machine = `x64 | Some x -> x in
 
   (* fully resolve filenames, eliminate duplicates *)
   let _, files =
@@ -774,15 +774,25 @@ let build_dll link_exe output_file files exts extra_args =
   in
   (* Collect all the available symbols, including those defined
      in default libraries *)
-  let defined, from_imports, resolve_alias, resolve_alternate =
+  let defined, from_imports, resolve_alias, resolve_alternate, relative_syms =
     let aliases = Hashtbl.create 16 in
     let alternates = Hashtbl.create 16 in
+    let relative_syms = ref StrSet.empty in
     let defined = ref StrSet.empty in
     let from_imports = ref StrSet.empty in (* symbols from import libraries *)
     let add_def s = defined := StrSet.add s !defined in
 
     let collected = Hashtbl.create 8 in
     let rec collect_defined_obj obj =
+      (* Collect symbols requiring thunks *)
+      if use_jmptbl then
+        List.iter
+          (fun sect ->
+             List.iter
+               (* XXX x64-ism - need a more general function! *)
+               (fun r ->
+                  if r.rtype = 0x04 then
+                    relative_syms := StrSet.add r.symbol.sym_name !relative_syms) sect.relocs) obj.sections;
       (* see comments on Cygwin64 COMDATA sections.  Here we give a
          unique name to the internal symbol.  We use ?? to ensure the
          symbol is not exported in flexdll export table (see
@@ -876,7 +886,7 @@ let build_dll link_exe output_file files exts extra_args =
     if !machine = `x64 then add_def "__ImageBase"
     else add_def "___ImageBase";
 
-    !defined, !from_imports, (Hashtbl.find aliases), (Hashtbl.find alternates)
+    !defined, !from_imports, (Hashtbl.find aliases), (Hashtbl.find alternates), !relative_syms
   in
 
   (* Determine which objects from the given libraries should be linked
@@ -976,10 +986,13 @@ let build_dll link_exe output_file files exts extra_args =
 
   let close_obj name imps obj =
     error_imports name imps;
-    if use_jmptbl then
-      add_import name imps
-    else
-      add_reloc name obj imps;
+    let imports, relocs =
+      if use_jmptbl then
+        StrSet.partition (fun s -> StrSet.mem s relative_syms) imps
+      else
+        imps, StrSet.empty in
+    add_import name imports;
+    add_reloc name obj relocs;
     record_obj obj
   in
 
