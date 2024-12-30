@@ -39,6 +39,9 @@ typedef unsigned long uintnat;
 #define RELOC_REL32_4   0x0003
 #define RELOC_REL32_5   0x0006
 #define RELOC_32NB      0x0007
+#define RELOC_BRANCH26  0x0009
+#define RELOC_PAGEOFFSET_12A 0x000a
+#define RELOC_PAGEBASE_REL21 0x000b
 #define RELOC_DONE      0x0100
 
 typedef struct { UINT_PTR kind; char *name; UINT_PTR *addr; } reloc_entry;
@@ -263,6 +266,9 @@ static void cannot_resolve_msg(char *name, err_t *err) {
   err->message[l+n] = 0;
 }
 
+//#define DEBUG(fmt, ...) fprintf(stderr, fmt "\n", __VA_ARGS__); fflush(stderr)
+#define DEBUG(...)
+
 static void relocate(resolver f, void *data, reloctbl *tbl, void **jmptbl, err_t *err) {
   reloc_entry *ptr;
   INT_PTR s;
@@ -359,6 +365,113 @@ static void relocate(resolver f, void *data, reloctbl *tbl, void **jmptbl, err_t
       rel_offset = 0;
       reloc_type = "32NB";
       break;
+    /* ARM64 Relocations. References
+       - RELOC_BRANCH26: https://developer.arm.com/documentation/ddi0602/2024-12/Base-Instructions/BL--Branch-with-link-
+       - RELOC_PAGEOFFSET_12A: https://developer.arm.com/documentation/ddi0602/2024-12/Base-Instructions/ADD--immediate---Add-immediate-value-
+       - RELOC_PAGEBASE_REL21: https://developer.arm.com/documentation/ddi0602/2024-12/Base-Instructions/ADRP--Form-PC-relative-address-to-4KB-page-?lang=en
+       - lld implementations in https://github.com/llvm/llvm-project/blob/main/lld/COFF/Chunks.cpp
+       RELOC_PAGEOFFSET_12A and RELOC_PAGEBASE_REL21 are just standard relocations.
+       RELOC_BRANCH26 requires the insertion of a veneer, the space for which will have been allocated by flexlink. */
+    case RELOC_BRANCH26:
+      rel_offset = -1;
+      DEBUG("RELOC_BRANCH26 for %s; s = %p; ptr->addr = %p, *ptr->addr = %x", ptr->name, (void *)(UINT_PTR)s, ptr->addr, *((UINT*)ptr->addr));
+      /* Trampoline:
+           adrp    xip0, toofar
+           add     xip0, xip0, PageOffset(toofar)
+           br      xip0
+         Which is why it's tempting to use the other approach, as that should simply turn BRANCH26 into PAGEBASE_REL21+PAGEBASE_12A */
+      if (!jmptbl) {
+        sprintf(err->message, "flexdll error: cannot relocate %s RELOC_BRANCH26, target is too far: %p  %p",
+                ptr->name, (void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
+        err->code = 3;
+        return;
+      }
+once_more_with_feeling:
+      if (!sym->trampoline) {
+        void* trampoline;
+        trampoline = sym->trampoline = *jmptbl;
+        DEBUG("Using 16 bytes of jmptbl at %p", trampoline);
+        /* Definitely get addresses which are beyond adrp+add - but is it worth
+           therefore having both veneers? */
+        /* 0x58000090 which should do ldr xip0, PC64+8 */
+        /* br xip0 */
+        *((PUINT_PTR)trampoline) = 0xd61f020058000050;
+        *((PUINT_PTR)trampoline + 1) = s;
+        /* XXX Range check */
+/*
+        INT_PTR imm = s - (INT_PTR)trampoline;
+        fprintf(stderr, "Actual offset is %lld\n", imm); fflush(stderr);
+        imm = ((imm & 0x3000) << 17) + ((imm >> 10) & 0xFFFFE0) + ((imm & 0xfff) << 42);
+        fprintf(stderr, "Computed transform of %llx\n", imm); fflush(stderr);
+*/
+        /* adrp xip0, 0; add xip0, xip0, 0 */
+/*
+        *((PUINT_PTR)trampoline) = 0x9100021090000010 + imm;
+        fprintf(stderr, "Computed trampoline of 0x%llx at %p\n", *((PUINT_PTR)trampoline), trampoline); fflush(stderr);
+*/
+        /* br xip0 */
+/*
+        *((unsigned int*)trampoline + 2) = 0xd61f0200;
+*/
+        *((UINT_PTR*)jmptbl) += 16;
+      }
+      s = (UINT_PTR)(sym->trampoline);
+      DEBUG("Reloaded at %p", sym->trampoline);
+      /* XXX Lower two bits should be zer0 */
+      s -= (INT_PTR)(ptr->addr);
+      /* XXX There must be a Christmas bit trick here to test for overflow of a signed 28-bit value */
+      if (s > 0x7FFFFFF || s < -134217728) {
+        DEBUG("Trampoline is too far away (%llx) - resetting", s);
+        sym->trampoline = NULL;
+        s = (UINT_PTR)sym->addr; /* XXX Yuck! */
+        goto once_more_with_feeling;
+      }
+      DEBUG("Offset is %llx", s);
+      /* XXX Existing bits should be 0? */
+      *((UINT32*) ptr->addr) += ((INT32)s >> 2);
+      DEBUG("Patched to %x", *((UINT32*)ptr->addr));
+      s = 0; /* XXX Counters the nonsense below  */
+      break;
+    case RELOC_PAGEOFFSET_12A:
+      rel_offset = -1;
+      DEBUG("RELOC_PAGEBASE_12A for %s; s = %p; ptr->addr = %p, *ptr->addr = %x", ptr->name, (void *)(UINT_PTR)s, ptr->addr, *((UINT*)ptr->addr));
+      *((UINT32*) ptr->addr) += ((s & 0xfff) << 10);
+      DEBUG("Patched to %x", *((UINT32*)ptr->addr));
+      s = 0; /* XXX Counters the nonsense below  */
+      break;
+    case RELOC_PAGEBASE_REL21:
+      rel_offset = -1;
+      DEBUG("RELOC_PAGEBASE_REL21 for %s; s = %p; ptr->addr = %p, *ptr->addr = %x", ptr->name, (void *)(UINT_PTR)s, ptr->addr, *((UINT*)ptr->addr));
+      /* XXX This is going to need a "veneer" case as well if the range truly is beyond adrp/ */
+      INT_PTR imm = s - (INT_PTR)ptr->addr;
+      DEBUG("Got immediate of %lld", imm);
+      if ((imm & ~0x1ffffffff) != 0) {
+        if (!jmptbl) {
+          sprintf(err->message, "flexdll error: cannot relocate %s RELOC_PAGEBASE_REL21, target is too far: %p  %p",
+                  ptr->name, (void *)((UINT_PTR) s), (void *) ((UINT_PTR)(INT32) s));
+          err->code = 3;
+          return;
+        }
+        /* - Is this sound? */
+        DEBUG("Adding a veneer :-/");
+        void* trampoline = *jmptbl;
+        DEBUG("Using 16 bytes of jmptbl at %p", trampoline);
+        /* 0x58000090 which should do ldr xip0, PC64+4 XXX Description, etc. */
+        /* br xip0 */
+        *((PUINT_PTR)trampoline) = 0x1400000058000040 + ((((INT_PTR)ptr->addr - (UINT_PTR)trampoline) & 0xffffffc) << 30) + (*((UINT*)ptr->addr) & 0x1f);
+        *((PUINT_PTR)trampoline + 1) = (s & ~0xfff);
+        DEBUG("Computed veneer of 0x%llx loading 0x%llx at %p", *((PUINT_PTR)trampoline), *((PUINT_PTR)trampoline + 1), trampoline);
+        *((UINT32*) ptr->addr) = ((UINT32)((INT_PTR)trampoline - (INT_PTR)(ptr->addr)) >> 2) + 0x14000000;
+        *((UINT_PTR*)jmptbl) += 16;
+      } else {
+        DEBUG("Actual offset is %lld", imm);
+        imm = ((imm & 0x3000) << 17) + ((imm >> 9) & 0xFFFFE0);
+        DEBUG("Computed transform of %llx", imm);
+        *((UINT32*) ptr->addr) += (UINT32)imm;
+      }
+      DEBUG("Patched to %x", *((UINT32*)ptr->addr));
+      s = 0; /* XXX Counters the nonsense below  */
+      break;
     default:
       fprintf(stderr, "flexdll: unknown relocation kind");
       exit(2);
@@ -400,6 +513,9 @@ retry:
         s -= (INT_PTR)(ptr->addr) + rel_offset;
         s += *((INT32*)ptr->addr);
       }
+      /* Comment missing in the original implementation! The purpose of this retry is that we may have
+         loaded a subsequent DLL which is too far from the trampoline... so on retry we'll instead make
+         a fresh one in _this_ DLL's jmptbl section (it will therefore succeed) */
       if (s != (INT32)s) {
         sym->trampoline = NULL;
         goto retry;

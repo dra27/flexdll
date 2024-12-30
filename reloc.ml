@@ -461,6 +461,13 @@ let add_reloc_table obj obj_name p trampolines =
         | `x64, 0x09 (* IMAGE_REL_AMD64_REL32_5 *) when not !no_rel_relocs->
             0x0006, true (* rel32_5 *)
 
+        | `arm64, 0x03 (* IMAGE_REL_ARM64_BRANCH26 *) ->
+            0x0009, true
+        | `arm64, 0x06 (* IMAGE_REL_ARM64_PAGEOFFSET_12A *) ->
+            0x000a, false
+        | `arm64, 0x04 (* IMAGE_REL_ARM64_PAGEBASE_REL21 *) ->
+            0x000b, false
+
         | (`x86 | `x64), (0x0a (* IMAGE_REL_{I386|AMD64}_SECTION *) |
                           0x0b (* IMAGE_REL_{I386|AMD64}_SECREL*) )
         | `arm64, (0x0d (* IMAGE_REL_ARM64_SECTION *) |
@@ -470,9 +477,6 @@ let add_reloc_table obj obj_name p trampolines =
         | machine, k ->
             let rtype =
               match machine, k with
-              | `arm64, 0x03 -> "IMAGE_REL_ARM64_BRANCH26"
-              | `arm64, 0x04 -> "IMAGE_REL_ARM64_PAGEBASE_REL21"
-              | `arm64, 0x06 -> "IMAGE_REL_ARM64_PAGEOFFSET_12A"
               | `arm64, 0x07 -> "IMAGE_REL_ARM64_PAGEOFFSET_12L"
               | `arm64, 0x0f -> "IMAGE_REL_ARM64_BRANCH19"
               | `arm64, 0x10 -> "IMAGE_REL_ARM64_BRANCH14"
@@ -623,10 +627,15 @@ let add_master_reloc_table obj names symname =
   obj.sections <- sect :: obj.sections
 
 let add_master_jmp_table obj names symname =
-  let trampolines = StrSet.cardinal names in
+  let trampolines = StrSet.cardinal names + 64 in (* XXX Dirty hack, since ldr trampolines are per-relocation, not per symbol *)
   let sect = Section.create ".mjmptbl" 0xe0500020l in
+  let size =
+    match !machine with
+    | `x64 -> 16
+    | `arm64 -> 16
+    | `x86 -> assert false in
   obj.symbols <- (Symbol.export symname sect 0l) :: obj.symbols;
-  sect.data <- `Uninit (trampolines * 16);
+  sect.data <- `Uninit (trampolines * size);
   obj.sections <- sect :: obj.sections
 
 
@@ -874,7 +883,7 @@ let build_dll link_exe output_file files exts extra_args =
     List.iter (fun fn -> collect_file (find_file fn)) exts;
 
     if main_pgm then add_def (usym "static_symtable")
-    else (add_def (usym "reloctbl"); if !machine = `x64 then add_def (usym "jmptbl"));
+    else (add_def (usym "reloctbl"); if !machine = `x64 || !machine = `arm64 then add_def (usym "jmptbl"));
 
     if !machine = `x64 || !machine = `arm64 then add_def "__ImageBase"
     else add_def "___ImageBase";
@@ -1061,7 +1070,7 @@ let build_dll link_exe output_file files exts extra_args =
     (usym (if main_pgm then "static_symtable" else "symtbl"));
   if not main_pgm then begin
     add_master_reloc_table obj !reloctbls (usym "reloctbl");
-    if !machine = `x64 then
+    if !machine = `x64 || !machine = `arm64 then
       add_master_jmp_table obj !trampolines (usym "jmptbl");
   end;
 
@@ -1190,7 +1199,7 @@ let build_dll link_exe output_file files exts extra_args =
           else
             let def_file, oc = open_temp_file "flexlink" ".def" in
             Printf.fprintf oc "EXPORTS\n  reloctbl\n  symtbl\n";
-            if !machine = `x64 then
+            if !machine = `x64 || !machine = `arm64 then
               Printf.fprintf oc "  jmptbl\n";
             close_out oc;
             Filename.quote def_file
@@ -1218,7 +1227,7 @@ let build_dll link_exe output_file files exts extra_args =
           else
             let def_file, oc = open_temp_file "flexlink" ".def" in
             Printf.fprintf oc "EXPORTS\n  reloctbl\n  symtbl\n";
-            if !machine = `x64 then
+            if !machine = `x64 || !machine = `arm64 then
               Printf.fprintf oc "  jmptbl\n";
             close_out oc;
             Filename.quote def_file
