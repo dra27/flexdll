@@ -439,6 +439,7 @@ module Reloc = struct
     let rtype =
       match machine with
       | `x86 -> 0x06
+      | `arm64 -> 0x0e
       | `x64 -> 0x01
     in
     sec.relocs <- { addr = addr; symbol = sym; rtype = rtype } :: sec.relocs
@@ -447,6 +448,7 @@ module Reloc = struct
     let rtype =
       match machine with
       | `x86 -> 0x14
+      | `arm64 -> 0x11
       | `x64 -> 0x04
     in
     sec.relocs <- { addr = addr; symbol = sym; rtype = rtype } :: sec.relocs
@@ -673,6 +675,7 @@ module Coff = struct
     let machine =
       match machine with
       | `x64 -> 0x8664
+      | `arm64 -> 0xaa64
       | `x86 -> 0x14c
     in
     { bigobj = false;
@@ -692,7 +695,7 @@ module Coff = struct
       | _ -> raise Exit
     and aux1 i0 i = if i = l then (String.sub s i0 (i - i0), [])::[]
     else match s.[i] with
-      | 'a'..'z' | 'A'..'Z' | '-' -> aux1 i0 (i+1)
+      | 'a'..'z' | 'A'..'Z' | '0'..'9' | '-' -> aux1 i0 (i+1)
       | ' ' -> (String.sub s i0 (i - i0), []) :: aux0 (i+1)
       | ':' -> aux2 (String.sub s i0 (i - i0)) [] (i+1)
       | _   -> raise Exit
@@ -790,9 +793,10 @@ module Coff = struct
                 (* Remove extra information for function symbols *)
                 s.auxs <- Bytes.make (Bytes.length auxs) '\000'
             | _ ->
-                Symbol.dump s;
+                ()
+                (*Symbol.dump s;
                 Printf.printf "aux=%S\n%!" (Bytes.to_string s.auxs);
-                assert false);
+                assert false*));
          (match s.section with
             | `Num i when i > 0 && i <= Array.length sections ->
                 assert (i <= Array.length sections);
@@ -1053,7 +1057,7 @@ module Stacksize = struct
     let machine =
       match int16 opthdr 0 with
       | 0x10b -> `x86
-      | 0x20b -> `x64
+      | 0x20b -> `x64 (* XXX COMBAK This could be arm64, but does it matter? *)
       | magic -> Printf.ksprintf failwith "Cannot determine image target (magic = %x)." magic
     in
     let reserve_offset = hdr_offset + 24 + 72 in
