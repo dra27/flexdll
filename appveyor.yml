@@ -47,7 +47,8 @@ environment:
     - appveyor_build_worker_image: Visual Studio 2022
       OCAMLBRANCH: 5.4
       SKIP_OCAML_TEST: no
-    - OCAMLBRANCH: trunk
+    - appveyor_build_worker_image: Visual Studio 2022
+      OCAMLBRANCH: trunk
       OCAML_PORT: mingw64
       SKIP_OCAML_TEST: no
   OCAMLROOT: C:/OCaml
