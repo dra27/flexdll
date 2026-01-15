@@ -44,6 +44,8 @@ environment:
       OCAML_PORT: mingw64
     - OCAMLBRANCH: 5.3
       OCAML_PORT: mingw64
+    - appveyor_build_worker_image: Visual Studio 2022
+      OCAMLBRANCH: 5.4
       SKIP_OCAML_TEST: no
     - OCAMLBRANCH: trunk
       OCAML_PORT: mingw64
