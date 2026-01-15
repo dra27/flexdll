@@ -12,6 +12,7 @@ environment:
     ARTEFACTS: no
     FLEXDLL_VERSION: 0.44
     FLEXDLL_WARN_ERROR: true
+    VCVARS64: C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\amd64\vcvars64.bat
   matrix:
     - job_name: OCaml 3.11 branch
       OCAMLBRANCH: 3.11
@@ -64,9 +65,11 @@ environment:
       OCAML_PORT: mingw64
     - job_name: OCaml 5.3 branch
       appveyor_build_worker_image: Visual Studio 2022
+      VCVARS64: C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
       OCAMLBRANCH: 5.3
     - job_name: OCaml 5.4 branch (including bootstrap)
       appveyor_build_worker_image: Visual Studio 2022
+      VCVARS64: C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
       OCAMLBRANCH: 5.4
       SKIP_OCAML_TEST: no
     - job_name: OCaml trunk branch (including bootstrap; mingw-w64 x86_64)
@@ -89,7 +92,7 @@ install:
   - '"%CYG_ROOT%\setup-x86_64.exe" --quiet-mode --no-shortcuts --no-startmenu --no-desktop --only-site --root "%CYG_ROOT%" --site "%CYG_MIRROR%" --local-package-dir "%CYG_CACHE%" --packages unzip,zip > nul'
   - '%CYG_ROOT%\bin\bash -lc "zip --version" > nul || "%CYG_ROOT%\setup-x86_64.exe" --quiet-mode --no-shortcuts --no-startmenu --no-desktop --only-site --root "%CYG_ROOT%" --site "%CYG_MIRROR%" --local-package-dir "%CYG_CACHE%" --upgrade-also > nul'
   - '%CYG_ROOT%\bin\bash -lc "cygcheck -dc cygwin"'
-  - call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\amd64\vcvars64.bat"
+  - call "%VCVARS64%"
   - appveyor DownloadFile "https://github.com/ocaml/flexdll/archive/%FLEXDLL_VERSION%.tar.gz" -FileName "flexdll.tar.gz"
   - appveyor DownloadFile "https://github.com/ocaml/flexdll/releases/download/%FLEXDLL_VERSION%/flexdll-bin-%FLEXDLL_VERSION%.zip" -FileName "flexdll.zip"
   - appveyor DownloadFile "https://raw.githubusercontent.com/ocaml/ocaml/trunk/tools/msvs-promote-path" -FileName "msvs-promote-path"
