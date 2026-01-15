@@ -10,7 +10,7 @@ environment:
     CYG_CACHE: C:/cygwin64/var/cache/setup
     OCAML_PORT: msvc64
     ARTEFACTS: no
-    FLEXDLL_VERSION: 0.43
+    FLEXDLL_VERSION: 0.44
     FLEXDLL_WARN_ERROR: true
   matrix:
     - job_name: OCaml 3.11 branch
